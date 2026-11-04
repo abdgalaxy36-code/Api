@@ -20,3 +20,7 @@ tools/cache/
 .idea/
 *.iml
 .DS_Store
+
+# python bytecode
+__pycache__/
+*.pyc
