@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RuH Flights</string>
+    <string name="subtitle">RUH (OERK) · actual takeoffs &amp; landings · Asia/Riyadh</string>
+    <string name="arrived_label">ARRIVED</string>
+    <string name="departed_label">DEPARTED</string>
+    <string name="refresh">Refresh</string>
+    <string name="settings">Settings</string>
+    <string name="history_title">Daily history</string>
+    <string name="no_history">No saved days yet</string>
+    <string name="loading">Collecting actual movements…</string>
+    <string name="no_data">No actual movements yet — tap Refresh</string>
+    <string name="actual_only_status">Actual departures &amp; arrivals only · Asia/Riyadh</string>
+    <string name="key_hint">Jina API key</string>
+    <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
+    <string name="scheduled_excluded">Real takeoffs/landings only · scheduled &amp; cancelled excluded · times Asia/Riyadh</string>
+    <string name="compare_title">Today vs previous days</string>
+    <string name="compare_empty">No previous days with data yet</string>
+    <string name="test_key">Test keys</string>
+    <string name="apply_keys">Apply keys</string>
+    <string name="use_key_all">Use key for all 4</string>
+    <string name="airlabs_key">AirLabs API key (direct · 2 calls/collect)</string>
+    <string name="notif_channel">Flight movements</string>
+    <string name="quota_placeholder">Jina Reader: —</string>
+    <string name="data_source_note">Data: FR24 · FlightStats · Plane Finder (Jina) · AirLabs API · FlightAware login-walled</string>
+</resources>

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/card_bg"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingHorizontal="14dp"
+    android:paddingVertical="11dp"
+    android:layout_marginVertical="4dp">
+
+    <TextView
+        android:id="@+id/statDate"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:textColor="@color/text_primary"
+        android:textSize="14sp"
+        tools:text="Wed 4 Nov 2026" />
+
+    <TextView
+        android:id="@+id/statDep"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="12dp"
+        android:textColor="@color/departed"
+        android:textSize="13sp"
+        tools:text="88 D" />
+
+    <TextView
+        android:id="@+id/statArr"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="14dp"
+        android:textColor="@color/arrived"
+        android:textSize="13sp"
+        tools:text="59 A" />
+
+    <TextView
+        android:id="@+id/statTotal"
+        android:layout_width="46dp"
+        android:layout_height="wrap_content"
+        android:gravity="end"
+        android:textColor="@color/accent"
+        android:textSize="17sp"
+        android:textStyle="bold"
+        tools:text="147" />
+</LinearLayout>

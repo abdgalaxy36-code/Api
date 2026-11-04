@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RUH Live Flights</string>
+
+    <string name="departures">Departures</string>
+    <string name="arrivals">Arrivals</string>
+
+    <string name="section_today">TODAY</string>
+    <string name="section_status">STATUS</string>
+    <string name="section_best_days">BEST DAYS</string>
+    <string name="section_history">HISTORY</string>
+
+    <string name="status_title">STATUS</string>
+    <string name="status_last_updated">Last updated</string>
+    <string name="status_refresh">Auto-refresh</string>
+    <string name="status_days">Days collected</string>
+    <string name="status_source">Data source</string>
+
+    <string name="no_flights">No real-time flights yet</string>
+    <string name="loading">Loading…</string>
+    <string name="refresh">Refresh</string>
+    <string name="no_stats">Nothing collected yet — pull to refresh</string>
+    <string name="today_none">No movements yet today</string>
+</resources>

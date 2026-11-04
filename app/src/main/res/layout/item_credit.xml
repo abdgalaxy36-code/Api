@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/card_bg"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingHorizontal="12dp"
+    android:paddingVertical="10dp"
+    android:layout_marginTop="6dp">
+
+    <TextView
+        android:id="@+id/creditName"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:textColor="#E6EDF3"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        tools:text="Jina" />
+
+    <TextView
+        android:id="@+id/creditValue"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="15sp"
+        android:textStyle="bold"
+        tools:text="19 / 20"
+        tools:textColor="#3FB950" />
+
+    <TextView
+        android:id="@+id/creditNote"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:textColor="#6B7785"
+        android:textSize="11sp"
+        tools:text="main" />
+</LinearLayout>

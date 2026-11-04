@@ -1,0 +1,22 @@
+# build output
+build/
+app/build/
+.gradle/
+.kotlin/
+
+# machine specific
+local.properties
+
+# signing key — never publish it
+*.jks
+*.keystore
+app/keystore.jks
+
+# cached FR24 history pages: 21 MB of re-fetchable HTML.
+# The generated assets (backfill.json / backfill_flights.json) ARE committed.
+tools/cache/
+
+# ide
+.idea/
+*.iml
+.DS_Store

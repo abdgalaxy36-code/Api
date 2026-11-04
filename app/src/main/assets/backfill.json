@@ -1,0 +1,32 @@
+[
+ {
+  "date": "2026-10-29",
+  "departures": 15,
+  "arrivals": 15
+ },
+ {
+  "date": "2026-10-30",
+  "departures": 15,
+  "arrivals": 14
+ },
+ {
+  "date": "2026-10-31",
+  "departures": 11,
+  "arrivals": 14
+ },
+ {
+  "date": "2026-11-01",
+  "departures": 22,
+  "arrivals": 19
+ },
+ {
+  "date": "2026-11-02",
+  "departures": 22,
+  "arrivals": 21
+ },
+ {
+  "date": "2026-11-03",
+  "departures": 23,
+  "arrivals": 23
+ }
+]
