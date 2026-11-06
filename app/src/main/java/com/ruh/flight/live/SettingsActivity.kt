@@ -60,6 +60,7 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.backBtn).setOnClickListener { finish() }
 
         findViewById<Button>(R.id.checkBtn).setOnClickListener { runCheck() }
+        findViewById<Button>(R.id.fixBtn).setOnClickListener { runFix() }
         findViewById<Button>(R.id.creditsBtn).setOnClickListener { checkCredits() }
         findViewById<Button>(R.id.fcKeySaveBtn).setOnClickListener {
             ServiceQuota.setFirecrawlKey(this, fcKeyInput.text.toString())
@@ -232,15 +233,134 @@ class SettingsActivity : AppCompatActivity() {
 
     // ----------------------------------------------------------- data check
 
+    /** What FR24 says happened on a day whose window it still serves. */
+    private class SourceDay(
+        val date: String,
+        val rows: List<LiveFlight>,
+        val stored: Int?,
+        val error: String?
+    ) {
+        val total: Int get() = rows.size
+        val needsFix: Boolean get() = error == null && stored != rows.size
+    }
+
     private fun runCheck() {
         checkResult.text = "Checking…"
         Thread {
-            val report = try {
+            val internal = try {
                 store.verify()
             } catch (e: Exception) {
                 "Check failed: ${e.message}"
             }
+            val source = try {
+                againstSource()
+            } catch (e: Exception) {
+                "FR24 comparison failed: ${e.message}"
+            }
+            val report = "$internal\n\n$source"
             Log.i(Fr24Api.TAG, "data check:\n$report")
+            runOnUiThread { checkResult.text = report }
+        }.start()
+    }
+
+    /**
+     * The internal check only proves the rows agree with each other — a day
+     * that lost its whole morning still passes it. So the last day or two
+     * (all FR24's schedule window still covers) are pulled again and counted
+     * here, independently of the app's own numbers.
+     */
+    private fun loadSource(): List<SourceDay> {
+        Fr24Api.quotaContext = applicationContext
+        val y = Clock.today().minusDays(1)
+        val t = Clock.today()
+        val yStart = y.atStartOfDay(Clock.zone).toEpochSecond()
+        val tStart = t.atStartOfDay(Clock.zone).toEpochSecond()
+
+        val yDep = Fr24Api.fetch("departures", yStart)
+        val yArr = Fr24Api.fetch("arrivals", yStart)
+        val yRows = (yDep.flights + yArr.flights)
+        val yErr = yDep.error ?: yArr.error
+
+        val tDep = Fr24Api.fetch("departures", tStart)
+        val tArr = Fr24Api.fetch("arrivals", tStart)
+        val tRows = (tDep.flights + tArr.flights)
+        val tErr = tDep.error ?: tArr.error
+
+        val yKey = y.toString()
+        val tKey = t.toString()
+        return listOf(
+            SourceDay(
+                yKey,
+                yRows.filter { Clock.dayKey(it.realEpoch) == yKey },
+                store.get(yKey)?.total,
+                yErr
+            ),
+            // today also owns the flights scheduled yesterday that moved after midnight
+            SourceDay(
+                tKey,
+                (tRows.filter { Clock.dayKey(it.realEpoch) == tKey } +
+                    yRows.filter { Clock.dayKey(it.realEpoch) == tKey })
+                    .distinctBy { it.dedupKey() },
+                store.get(tKey)?.total,
+                tErr
+            )
+        )
+    }
+
+    private fun againstSource(): String {
+        val sb = StringBuilder("AGAINST FR24 SOURCE\n")
+        for (d in loadSource()) {
+            sb.append(
+                if (d.error != null) "  ${d.date}: FR24 unreachable (${d.error})\n"
+                else "  ${d.date}: ${verdict(d.stored, d.total)}\n"
+            )
+        }
+        sb.append("\nOnly the last day or two can be compared: FR24's\n")
+        sb.append("schedule window no longer reaches older dates.")
+        return sb.toString().trimEnd()
+    }
+
+    private fun verdict(stored: Int?, source: Int): String = when {
+        stored == null -> "stored: none  FR24=$source"
+        stored == source -> "MATCH"
+        else -> "MISMATCH  app=$stored  FR24=$source"
+    }
+
+    /**
+     * Rebuilds, straight from FR24, only the days the check found wrong.
+     * Every other day is left untouched — this never overwrites good data.
+     */
+    private fun runFix() {
+        checkResult.text = "Fetching FR24…"
+        Thread {
+            val report = try {
+                val days = loadSource()
+                val sb = StringBuilder()
+                var fixed = 0
+                for (d in days) {
+                    when {
+                        d.error != null ->
+                            sb.append("  ${d.date}: skipped — FR24 unreachable\n")
+                        !d.needsFix ->
+                            sb.append("  ${d.date}: already correct (${d.total}) — untouched\n")
+                        else -> {
+                            val before = d.stored ?: 0
+                            store.replaceDayFlights(d.date, d.rows)
+                            store.recountDay(d.date)
+                            val after = store.get(d.date)?.total ?: 0
+                            fixed++
+                            sb.append("  ${d.date}: $before -> $after  FIXED (FR24=$after)\n")
+                            Log.i(Fr24Api.TAG, "data fix ${d.date}: $before -> $after")
+                        }
+                    }
+                }
+                val head = if (fixed > 0) "FIXED $fixed day(s) from FR24\n"
+                else "NOTHING TO FIX — every day already matches FR24\n"
+                head + sb.toString().trimEnd()
+            } catch (e: Exception) {
+                "Fix failed: ${e.message}"
+            }
+            Log.i(Fr24Api.TAG, "data fix:\n$report")
             runOnUiThread { checkResult.text = report }
         }.start()
     }
@@ -318,6 +438,9 @@ class SettingsActivity : AppCompatActivity() {
                 val (stats, flights) = GithubBackup.importJson(json)
                 store.insertStats(stats)
                 store.insertFlights(flights)
+                // Rows that came from a file were not collected here, so the
+                // next refresh is allowed to repair them against FR24.
+                AppPrefs.clearCatchUp(this)
                 Log.i(Fr24Api.TAG, "restore ok days=${stats.size} flights=${flights.size}")
                 runOnUiThread {
                     backupStatus.text =

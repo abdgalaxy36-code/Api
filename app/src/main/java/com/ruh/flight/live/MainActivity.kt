@@ -79,6 +79,9 @@ class MainActivity : AppCompatActivity() {
 
         stats = StatsStore(this)
         stats.seedFromAssets(this)
+        // First launch after the full-day repair update: let every day have
+        // one more pass so the hours lost while the phone slept come back.
+        AppPrefs.resetCatchUpIfOutdated(this)
         Fr24Api.quotaContext = applicationContext
         Notifier.ensureChannels(this)
         Notifier.scheduleAll(this)
@@ -134,30 +137,47 @@ class MainActivity : AppCompatActivity() {
      * works and its 24 h window covers the previous evening. This runs once,
      * right after midnight, and merges whatever it finds into yesterday.
      */
-    private fun tryCatchUpPreviousDay() {
+    /**
+     * The day that just ended, fetched in full.
+     *
+     * FR24's schedule window only reaches back to yesterday, so this is the
+     * one chance to repair a day the phone slept through — and it has to start
+     * at 00:00, not noon, or every morning movement is lost forever.
+     *
+     * Returns the flights that were scheduled yesterday but actually moved
+     * after midnight: those belong to today's count.
+     */
+    private fun repairPreviousDay(): List<LiveFlight> {
         val todayStr = Clock.todayKey()
         val yDate = Clock.today().minusDays(1)
         val yStr = yDate.toString()
-        if (stats.get(todayStr) != null) return      // already collected today
-        if (stats.get(yStr) == null) return           // no yesterday to repair
-        if (AppPrefs.catchUpDone(this, yStr)) return  // already repaired
+        if (AppPrefs.catchUpDone(this, yStr)) return emptyList()
 
-        val noon = yDate.atTime(12, 0).atZone(Clock.zone).toEpochSecond()
-        val dep = Fr24Api.fetch("departures", noon)
-        val arr = Fr24Api.fetch("arrivals", noon)
-        // keep only the rows whose ACTUAL time falls on yesterday
+        val dayStart = yDate.atStartOfDay(Clock.zone).toEpochSecond()
+        val dep = Fr24Api.fetch("departures", dayStart)
+        val arr = Fr24Api.fetch("arrivals", dayStart)
+        // Both sides have to come back: a half day is what lost the mornings.
+        if (dep.error != null || arr.error != null) {
+            Log.i(Fr24Api.TAG, "repair $yStr deferred: ${dep.error ?: arr.error}")
+            return emptyList()
+        }
+        AppPrefs.setCatchUpDone(this, yStr)
+
         val depY = dep.flights.filter { Clock.dayKey(it.realEpoch) == yStr }
         val arrY = arr.flights.filter { Clock.dayKey(it.realEpoch) == yStr }
-        // mark it handled even with nothing to add, so it is not refetched;
-        // but keep it open if the network itself failed
-        if (dep.error == null || arr.error == null) AppPrefs.setCatchUpDone(this, yStr)
-        if (depY.isEmpty() && arrY.isEmpty()) return
-
-        stats.mergeDayFlights(yStr, depY + arrY)
-        stats.recountDay(yStr)
-        AppPrefs.setCatchUpDone(this, yStr)
-        Log.i(Fr24Api.TAG, "catch-up $yStr: +${depY.size} dep +${arrY.size} arr")
-        // if the app was asleep at midnight, the summary alarm never fired
+        if (depY.isNotEmpty() || arrY.isNotEmpty()) {
+            stats.mergeDayFlights(yStr, depY + arrY)
+            stats.recountDay(yStr)
+        }
+        // scheduled yesterday, moved after midnight -> counted today
+        val overnight = (dep.flights + arr.flights)
+            .filter { Clock.dayKey(it.realEpoch) == todayStr }
+            .distinctBy { it.dedupKey() }
+        Log.i(
+            Fr24Api.TAG,
+            "repair $yStr: +${depY.size} dep +${arrY.size} arr (+${overnight.size} into today)"
+        )
+        // if the phone slept through midnight, the summary never fired
         if (!AppPrefs.summaryPosted(this, yStr)) {
             val day = stats.get(yStr)
             if (day != null) {
@@ -165,6 +185,7 @@ class MainActivity : AppCompatActivity() {
                 AppPrefs.setSummaryPosted(this, yStr, true)
             }
         }
+        return overnight
     }
 
     /** Loading bar + live counter text while a refresh is running. */
@@ -200,19 +221,22 @@ class MainActivity : AppCompatActivity() {
         // so using "now" would hide every flight that already departed.
         val midnight = Fr24Api.todayMidnightEpoch()
         thread(name = "fr24-fetch") {
-            // Day rollover: when today has no row yet but yesterday has one,
-            // the clock has just passed midnight. Fetch the last 12 h of
-            // yesterday (a noon timestamp still reaches FR24) so no movement
-            // is lost when the day becomes history.
-            tryCatchUpPreviousDay()
+            // Recover yesterday in full first — FR24's window only reaches
+            // back one day, so this is the only chance to repair a day the
+            // phone slept through.
+            val overnight = repairPreviousDay()
 
             val (dep, arr) = Fr24Api.fetchBoth(midnight) { stage, pct, depN, arrN ->
                 runOnUiThread { showRefreshing(pct, stage, depN, arrN) }
             }
             // Only real movements count: parse() already drops anything without
             // an actual time, and todayOnly() drops other days in the 3-day window.
-            val depToday = Fr24Api.todayOnly(dep.flights)
-            val arrToday = Fr24Api.todayOnly(arr.flights)
+            // Overnight movers are scheduled yesterday, so today's own window
+            // never sees them — they come from the repair above.
+            val depToday = (Fr24Api.todayOnly(dep.flights) + overnight.filter { it.direction == "dep" })
+                .distinctBy { it.dedupKey() }
+            val arrToday = (Fr24Api.todayOnly(arr.flights) + overnight.filter { it.direction == "arr" })
+                .distinctBy { it.dedupKey() }
             runOnUiThread {
                 fetching = false
 
@@ -233,15 +257,21 @@ class MainActivity : AppCompatActivity() {
                 // when the whole picture came back clean.
                 if (dep.error == null && arr.error == null) {
                     val todayStr = Clock.todayKey()
-                    val total = depToday.size + arrToday.size
+                    // Merge, never replace: rows already collected (overnight
+                    // movers, the hourly background pass, a fix from Settings)
+                    // must survive the next refresh — and the count is always
+                    // read back from the rows, so TODAY and HISTORY can never
+                    // show two different numbers.
+                    stats.mergeDayFlights(todayStr, depToday + arrToday)
+                    stats.recountDay(todayStr)
+                    val stored = stats.get(todayStr)
+                    liveDep = stored?.departures ?: depToday.size
+                    liveArr = stored?.arrivals ?: arrToday.size
+                    val total = stored?.total ?: (depToday.size + arrToday.size)
                     // the record, counted over every other day
                     val prevBest = stats.all()
                         .filter { it.date != todayStr }
                         .maxOfOrNull { it.total } ?: 0
-                    stats.record(todayStr, depToday.size, arrToday.size)
-                    // keep the flight rows too, so tomorrow this day reopens
-                    // from history with its full list
-                    stats.replaceDayFlights(todayStr, depToday + arrToday)
                     if (total > prevBest && AppPrefs.notifiedBestDay(this) != todayStr) {
                         AppPrefs.setNotifiedBestDay(this, todayStr)
                         Notifier.postBestDay(this, todayStr, total, prevBest)
@@ -278,10 +308,11 @@ class MainActivity : AppCompatActivity() {
         val days = stats.all()
         val todayStr = Clock.todayKey()
         val today = days.find { it.date == todayStr }
-        val depShown = if (liveDep > 0) liveDep else (today?.departures ?: 0)
-        val arrShown = if (liveArr > 0) liveArr else (today?.arrivals ?: 0)
-        val todayTotal = if (liveDep > 0 || liveArr > 0) depShown + arrShown
-        else (today?.total ?: 0)
+        // The card reads the stored rows too — same rows as the list below it,
+        // so "12 flights" and "7 arrived / 5 departed" are always one number.
+        val depShown = today?.departures ?: 0
+        val arrShown = today?.arrivals ?: 0
+        val todayTotal = today?.total ?: 0
         Log.i(Fr24Api.TAG, "render days=${days.size} today=$todayStr total=$todayTotal")
 
         if (days.isEmpty() && depCache.isEmpty() && arrCache.isEmpty()) {
@@ -327,25 +358,27 @@ class MainActivity : AppCompatActivity() {
         })
 
         // the list opened from a square sits right under the stamp
-        if (openDir != null) {
-            // Prefer the live cache (it carries airline/terminal/gate/city);
-            // fall back to the stored rows so the list still opens when the
-            // last fetch failed.
-            val live = if (openDir == "dep") depCache else arrCache
-            val todayFlights = live
-                .filter { Clock.isToday(it.realEpoch) }
-                .distinctBy { it.dedupKey() }
+        val dir = openDir
+        if (dir != null) {
+            // Same single source as the counters: the stored rows (they hold
+            // the overnight movers too — the live cache only sees the flights
+            // from today's own window). Cache only as a pre-first-write fallback.
+            var todayFlights = stats.flightsFor(todayStr)
+                .filter { it.direction == dir }
+                .map { it.toLiveFlight() }
                 .sortedByDescending { it.realEpoch }
-                .ifEmpty {
-                    stats.flightsFor(todayStr)
-                        .filter { it.direction == openDir }
-                        .map { it.toLiveFlight() }
-                }
-            val title = if (openDir == "dep") getString(R.string.departures)
+            if (todayFlights.isEmpty()) {
+                val live = if (dir == "dep") depCache else arrCache
+                todayFlights = live
+                    .filter { Clock.isToday(it.realEpoch) }
+                    .distinctBy { it.dedupKey() }
+                    .sortedByDescending { it.realEpoch }
+            }
+            val title = if (dir == "dep") getString(R.string.departures)
             else getString(R.string.arrivals)
             body.addView(sectionLabel("${title.uppercase()} · ${todayFlights.size}"))
             if (todayFlights.isEmpty()) body.addView(emptyNote(getString(R.string.no_flights)))
-            else todayFlights.forEach { flightRow(body, it) }
+            else todayFlights.forEachIndexed { i, f -> flightRow(body, f, i + 1) }
         }
 
         // ---- 2. BEST DAYS: today against the single best day -------------
@@ -399,15 +432,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun dayFlights(body: LinearLayout, date: String, todayStr: String) {
-        // today renders from the live cache so it keeps airline/terminal/city;
-        // older days come back from the stored rows.
-        val flights: List<LiveFlight> = if (date == todayStr) {
-            (depCache + arrCache)
+        // One source of truth: the stored rows — exactly the set the D/A/total
+        // counters are counted over, so the list can never disagree with them.
+        // The live cache is only a fallback before the day's first write.
+        var flights: List<LiveFlight> = stats.flightsFor(date).map { it.toLiveFlight() }
+        if (flights.isEmpty() && date == todayStr) {
+            flights = (depCache + arrCache)
                 .filter { Clock.isToday(it.realEpoch) }
                 .distinctBy { it.dedupKey() }
                 .sortedByDescending { it.realEpoch }
-        } else {
-            stats.flightsFor(date).map { it.toLiveFlight() }
         }
 
         if (flights.isEmpty()) {
@@ -420,7 +453,7 @@ class MainActivity : AppCompatActivity() {
             textSize = 11f
             setPadding(dp(10), dp(2), dp(10), dp(4))
         })
-        flights.forEach { flightRow(body, it) }
+        flights.forEachIndexed { i, f -> flightRow(body, f, i + 1) }
     }
 
     // -------------------------------------------------------------------- rows
@@ -445,9 +478,9 @@ class MainActivity : AppCompatActivity() {
         return vb.root
     }
 
-    private fun flightRow(parent: LinearLayout, f: LiveFlight) {
+    private fun flightRow(parent: LinearLayout, f: LiveFlight, index: Int = 0) {
         val vb = ItemFlightBinding.inflate(LayoutInflater.from(this), parent, false)
-        FlightAdapter.bindRow(vb, f) { openFlight(it) }
+        FlightAdapter.bindRow(vb, f, { openFlight(it) }, index)
         parent.addView(vb.root)
     }
 

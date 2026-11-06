@@ -41,11 +41,17 @@ class FlightAdapter(
 
     companion object {
         /** Shared by the list adapter and the Stats "today's flights" section. */
-        fun bindRow(b: ItemFlightBinding, f: LiveFlight, onClick: (LiveFlight) -> Unit) {
+        fun bindRow(
+            b: ItemFlightBinding,
+            f: LiveFlight,
+            onClick: (LiveFlight) -> Unit,
+            index: Int = 0
+        ) {
             val tz = ZoneId.systemDefault()
             val fmt = DateTimeFormatter.ofPattern("HH:mm").withZone(tz)
 
-            b.number.text = f.number
+            // numbered position in the opened list: Flight 1, Flight 2, …
+            b.number.text = if (index > 0) "Flight $index  ·  ${f.number}" else f.number
             b.airline.text = f.airline.ifBlank { "—" }
             b.place.text = buildString {
                 if (f.otherCity.isNotBlank()) append(f.otherCity)

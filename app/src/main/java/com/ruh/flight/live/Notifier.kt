@@ -154,6 +154,30 @@ object Notifier {
         scheduleSummary(context)
         scheduleProgress(context)
         scheduleBackup(context)
+        scheduleRefresh(context)
+    }
+
+    /**
+     * Keeps today's count moving while the phone is asleep.
+     *
+     * Once an hour — frequent enough that no movement is lost, cheap enough
+     * not to chew through the battery or the fetch quota overnight.
+     */
+    fun scheduleRefresh(context: Context) {
+        if (!AppPrefs.autoRefresh(context)) return
+        val am = context.getSystemService(AlarmManager::class.java) ?: return
+        val pi = PendingIntent.getBroadcast(
+            context, 13,
+            Intent(context, AlarmReceiver::class.java).setAction(ACTION_REFRESH),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val delay = REFRESH_EVERY_MS
+        am.setAndAllowWhileIdle(
+            AlarmManager.RTC_WAKEUP,
+            System.currentTimeMillis() + delay,
+            pi
+        )
+        Log.i(TAG, "background refresh alarm in ${delay / 60_000L} min")
     }
 
     /** Fires just after midnight with the finished day's numbers. */
@@ -212,6 +236,10 @@ object Notifier {
     const val ACTION_SUMMARY = "com.ruh.flight.live.SUMMARY"
     const val ACTION_PROGRESS = "com.ruh.flight.live.PROGRESS"
     const val ACTION_BACKUP = "com.ruh.flight.live.BACKUP"
+    const val ACTION_REFRESH = "com.ruh.flight.live.REFRESH"
+
+    /** How often the screen-free refresh runs while the phone sleeps. */
+    const val REFRESH_EVERY_MS = 60 * 60_000L
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -248,6 +276,12 @@ class AlarmReceiver : BroadcastReceiver() {
                 val days = BackupState.daysSinceLastBackup(ctx)
                 if (days >= 7) Notifier.postBackupReminder(ctx, days)
                 Notifier.scheduleBackup(ctx)
+            }
+            Notifier.ACTION_REFRESH -> {
+                // The phone may have been asleep all day: collect today's
+                // movements anyway, then arm the next one.
+                Thread({ Sync.refresh(ctx) }, "bg-refresh").start()
+                Notifier.scheduleRefresh(ctx)
             }
         }
     }

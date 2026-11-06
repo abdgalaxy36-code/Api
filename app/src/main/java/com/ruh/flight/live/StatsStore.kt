@@ -154,17 +154,20 @@ class StatsStore(context: Context) :
     fun mergeDayFlights(date: String, flights: List<LiveFlight>) {
         if (date.isBlank() || flights.isEmpty()) return
         val db = writableDatabase
+        var added = 0
         db.beginTransaction()
         try {
             for (f in flights) {
-                db.insertWithOnConflict(
-                    FLIGHTS, null, flightValues(date, f), SQLiteDatabase.CONFLICT_IGNORE
-                )
+                if (db.insertWithOnConflict(
+                        FLIGHTS, null, flightValues(date, f), SQLiteDatabase.CONFLICT_IGNORE
+                    ) != -1L
+                ) added++
             }
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
         }
+        Log.i(Fr24Api.TAG, "merge $date: +$added of ${flights.size} rows")
     }
 
     /** Recount a day from its stored flight rows. */
@@ -203,7 +206,10 @@ class StatsStore(context: Context) :
 
     private fun flightValues(date: String, f: LiveFlight): ContentValues =
         ContentValues().apply {
-            put("date", date)
+            // A movement belongs to the day it actually happened: anything that
+            // departs or lands after 00:00 counts to the new day, never the
+            // previous one — so the row's date is derived from the real time.
+            put("date", if (f.realEpoch > 0) Clock.dayKey(f.realEpoch) else date)
             put("number", f.number)
             put("direction", f.direction)
             put("epoch", f.realEpoch)

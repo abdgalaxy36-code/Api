@@ -1,6 +1,7 @@
 package com.ruh.flight.live
 
 import android.content.Context
+import android.util.Log
 
 /** App-level switches that are not about the network or the backup. */
 object AppPrefs {
@@ -11,6 +12,8 @@ object AppPrefs {
     private const val K_BEST_DAY = "notified_best_day"
     private const val K_SUMMARY = "summary_posted_"
     private const val K_CATCHUP = "catchup_done_"
+    private const val K_CATCHUP_VER = "catchup_ver"
+    private const val CATCHUP_VER = 2
 
     /** Offered auto-refresh intervals. */
     val INTERVALS = listOf(
@@ -60,6 +63,30 @@ object AppPrefs {
 
     fun setCatchUpDone(context: Context, date: String) {
         prefs(context).edit().putBoolean(K_CATCHUP + date, true).apply()
+    }
+
+    /**
+     * v1 only recovered the second half of a day the phone slept through;
+     * v2 fetches it in full. Run this once after the update so the days that
+     * were stored short get one more pass.
+     */
+    fun resetCatchUpIfOutdated(context: Context) {
+        val p = prefs(context)
+        if (p.getInt(K_CATCHUP_VER, 1) >= CATCHUP_VER) return
+        clearCatchUp(context)
+        p.edit().putInt(K_CATCHUP_VER, CATCHUP_VER).apply()
+        Log.i("Fr24Live", "catch-up flags reset for a full-day repair pass")
+    }
+
+    /**
+     * Rows that arrived from a restored file were not collected here, so the
+     * repair is allowed to run again over them.
+     */
+    fun clearCatchUp(context: Context) {
+        val p = prefs(context)
+        val e = p.edit()
+        p.all.keys.filter { it.startsWith(K_CATCHUP) }.forEach { e.remove(it) }
+        e.apply()
     }
 
     private fun prefs(context: Context) =

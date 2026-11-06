@@ -35,8 +35,10 @@ build.sh                     build + sign + verify → dist/
 | 2 | **BEST DAYS** | Exactly two rows: `Today` and the single best day (`#1`), numbers only. |
 | 3 | **HISTORY** | One row per day (`date · D · A · total ▸`). Tap a day → opens every flight of that day. |
 
-Any flight anywhere → opens its FR24 page
-`https://www.flightradar24.com/data/flights/{NUMBER}`.
+Every opened list is **numbered** — `Flight 1 · SV1095`, `Flight 2 · …` — and
+reads the **same stored rows** the counters count, so a square showing `7` opens
+exactly 7 flights (the overnight landings included). Any flight anywhere → opens
+its FR24 page `https://www.flightradar24.com/data/flights/{NUMBER}`.
 
 Header: **refresh button** (⟳), **settings gear** (⚙), a **progress bar** and a
 live status line that moves during every refresh
@@ -135,16 +137,26 @@ becomes history the moment the device clock passes midnight.
 2. After midnight `Clock.todayKey()` returns the new date, so the app starts
    writing a **new** row; yesterday's rows stay untouched under yesterday's key
    and show up in HISTORY with their count and their flight list.
-3. **Catch-up at the rollover.** FR24 refuses a timestamp at a past midnight,
-   but a **noon** timestamp still works and its 24 h window covers the previous
-   evening. The moment the app sees "no row for today, but a row for
-   yesterday", it re-fetches with `timestamp = yesterday 12:00`, keeps the rows
-   whose actual time falls on yesterday, **merges** them into yesterday's rows
-   (existing rows are kept, so the morning of that day is not lost) and
-   recounts the day. Log line: `catch-up 2026-11-03: +4 dep +2 arr`.
+3. **Repair of the previous day — the fix for "the phone was off all day and
+   the count came out wrong".** FR24's schedule window reaches back exactly
+   one day, so once a day the app re-fetches **that whole day** with
+   `timestamp = yesterday 00:00` — not noon: a noon window threw away every
+   morning movement — merges the rows into yesterday's existing rows and
+   recounts it. It runs whether or not today already has a row, it is marked
+   done only when **both** directions came back, and otherwise it retries on
+   the next refresh. Flights that were scheduled yesterday but actually moved
+   after midnight are counted into **today**. Log line:
+   `repair 2026-11-05: +41 dep +35 arr (+0 into today)`.
 
-So the last hours of a day are captured even if the device was asleep at
-midnight.
+4. **Background refresh — the fix for "the app does not update while the phone
+   is unused".** Every **hour** an alarm fires `Sync.refresh()` even with the
+   screen off (`setAndAllowWhileIdle`) and merges today's window into today's
+   rows — frequent enough to lose nothing, cheap enough for battery and fetch
+   quota. It follows the **auto-refresh** switch. Log line:
+   `bg refresh D=26 A=15 T=41 pages=3/3`.
+
+So a day is collected **while it happens** and repaired **after it ends**, and
+neither needs the phone to be awake.
 
 ---
 
@@ -162,7 +174,10 @@ never overwritten.
 
 ### Data check (Settings → Run check)
 
-Scans every stored row and proves the data is real-time only:
+Two independent checks in one report.
+
+**1. Internal — does the database agree with itself?** Scans every stored row
+and proves the data is real-time only:
 
 ```
 Scanned 256 flight(s) across 7 day(s)
@@ -172,7 +187,45 @@ PASS  every day's count matches its total
 ALL CHECKS PASSED
 ```
 
-It also runs automatically once per launch (visible in logcat).
+**2. Against FR24 — is the number actually right?** The internal check cannot
+catch a day that lost its whole morning: four rows still agree with a total of
+four. So the check then asks FR24 what really happened on the days its
+schedule window still covers (yesterday and today) and prints a verdict per
+day:
+
+```
+AGAINST FR24 SOURCE
+  2026-11-05: MISMATCH  app=4  FR24=76
+  2026-11-06: MATCH
+
+Only the last day or two can be compared: FR24's
+schedule window no longer reaches older dates.
+```
+
+The internal part also runs automatically once per launch (visible in
+logcat); the FR24 comparison runs only when you press the button, because it
+costs a handful of requests.
+
+### Fix data (Settings → Fix data)
+
+The repair button for exactly the case above. It pulls yesterday and today
+again, and for **each day where the check says MISMATCH** it rebuilds that day
+from FR24 — the day's rows are replaced by FR24's own rows and the total is
+counted back from them:
+
+```
+FIXED 1 day(s) from FR24
+  2026-11-05: already correct (75) — untouched
+  2026-11-06: 8 -> 12  FIXED (FR24=12)
+```
+
+Days that already match are printed as untouched — **it never overwrites good
+data**, and if everything matches it reports
+`NOTHING TO FIX — every day already matches FR24`.
+
+Afterwards the screen is safe: today's refresh now **merges** its rows instead
+of replacing them, so a correct day cannot be clobbered by a later, shorter
+fetch, and both TODAY and HISTORY read their number back from the stored rows.
 
 ---
 
@@ -188,8 +241,16 @@ It also runs automatically once per launch (visible in logcat).
      recorded `total` — catches lost rows or a count without its flights.
 
   It prints a PASS/FAIL per check, lists the offending rows (first 20) and ends
-  with `ALL CHECKS PASSED` or `CHECKS FAILED`. It also runs automatically once
-  per launch (see logcat). It never touches the network.
+  with `ALL CHECKS PASSED` or `CHECKS FAILED`. It then compares yesterday's and
+  today's totals against FR24 itself and prints `MATCH` or
+  `MISMATCH  app=…  FR24=…` per day — the only way to notice a day that lost
+  data, since such a day is still internally consistent. The internal part also
+  runs automatically once per launch (see logcat); the FR24 comparison runs only
+  on the button.
+
+* **Fix data** — rebuilds only the days the check found wrong, straight from
+  FR24 (see *Fix data* above). Days that already match are reported as
+  untouched. Use it after `Run check` shows a MISMATCH.
 
 * **Service credits** — one compact coloured row per service:
 
@@ -218,7 +279,10 @@ It also runs automatically once per launch (visible in logcat).
   | Backup reminder | weekly, if no backup was made | how long ago the last backup was |
 
   If the day-summary alarm was missed because the phone was asleep, the
-  next-day catch-up posts it instead.
+  next-day repair posts it instead.
+
+  A fifth alarm carries **no** notification: the background refresh described
+  above, which keeps today's counts moving while the phone sleeps.
 
 * **GitHub backup** — repository / branch / file name / token, plus
   **Test** (checks the token can reach the repo and prints whether it is

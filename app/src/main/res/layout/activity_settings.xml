@@ -63,6 +63,13 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Run check" />
+
+            <Button
+                android:id="@+id/fixBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="Fix data" />
         </LinearLayout>
 
         <TextView
