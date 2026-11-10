@@ -25,4 +25,11 @@ object Clock {
 
     fun isToday(epochSec: Long): Boolean =
         epochSec > 0L && dayKey(epochSec) == todayKey()
+
+    /** "10 Nov" — short enough for a one-line report. */
+    fun shortDate(date: String): String = try {
+        LocalDate.parse(date).format(java.time.format.DateTimeFormatter.ofPattern("d MMM"))
+    } catch (e: Exception) {
+        date
+    }
 }

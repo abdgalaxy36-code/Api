@@ -124,7 +124,10 @@ object Fr24Api {
                 totalPages = meta.first
                 lastSched = meta.second
             } catch (e: Exception) {
-                if (pagesRead == 0) err = "parse ${e.message}"
+                if (pagesRead == 0) {
+                    err = if (body.contains("\"errors\"")) "timestamp out of range"
+                    else "parse ${e.message}"
+                }
                 break
             }
 

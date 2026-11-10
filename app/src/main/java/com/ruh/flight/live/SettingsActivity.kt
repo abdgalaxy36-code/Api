@@ -3,6 +3,9 @@ package com.ruh.flight.live
 import android.content.Context
 import android.graphics.Color
 import android.os.Bundle
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
@@ -240,11 +243,14 @@ class SettingsActivity : AppCompatActivity() {
         val stored: Int?,
         val error: String?,
         val cancelled: Int,
-        val cancelledStored: Int?
+        val cancelledStored: Int?,
+        /** false when yesterday's window failed: today's rows would miss the
+         *  overnight movers, so only the cancelled count may be compared. */
+        val rowsTrusted: Boolean = true
     ) {
         val total: Int get() = rows.size
-        val needsFix: Boolean get() =
-            error == null && (stored != rows.size || cancelledStored != cancelled)
+        val needsFix: Boolean get() = error == null &&
+            ((rowsTrusted && stored != rows.size) || cancelledStored != cancelled)
     }
 
     private fun runCheck() {
@@ -253,16 +259,16 @@ class SettingsActivity : AppCompatActivity() {
             val internal = try {
                 store.verify()
             } catch (e: Exception) {
-                "Check failed: ${e.message}"
+                listOf(ReportLine("check failed: ${e.message}", ReportLine.BAD))
             }
             val source = try {
                 againstSource()
             } catch (e: Exception) {
-                "FR24 comparison failed: ${e.message}"
+                listOf(ReportLine("FR24 check failed: ${e.message}", ReportLine.BAD))
             }
-            val report = "$internal\n\n$source"
-            Log.i(Fr24Api.TAG, "data check:\n$report")
-            runOnUiThread { checkResult.text = report }
+            val lines = internal + ReportLine("", ReportLine.PLAIN) + source
+            Log.i(Fr24Api.TAG, "data check:\n" + lines.joinToString("\n") { it.text })
+            runOnUiThread { checkResult.text = coloured(lines) }
         }.start()
     }
 
@@ -315,29 +321,51 @@ class SettingsActivity : AppCompatActivity() {
                 tStat?.total,
                 tErr,
                 tCancelled,
-                tStat?.cancelled
+                tStat?.cancelled,
+                rowsTrusted = yErr == null
             )
         )
     }
 
-    private fun againstSource(): String {
-        val sb = StringBuilder("AGAINST FR24 SOURCE\n")
+    private fun againstSource(): List<ReportLine> {
+        val lines = mutableListOf<ReportLine>()
         for (d in loadSource()) {
-            sb.append(
-                if (d.error != null) "  ${d.date}: FR24 unreachable (${d.error})\n"
-                else "  ${d.date}: ${verdict(d.stored, d.total)}" +
-                    "  cancelled ${verdict(d.cancelledStored, d.cancelled)}\n"
-            )
+            val day = Clock.shortDate(d.date)
+            if (d.error != null) {
+                lines += ReportLine("FR24 · $day no data (${d.error})", ReportLine.DIM)
+                continue
+            }
+            val rowsBad = d.rowsTrusted && d.stored != d.total
+            val cancelBad = d.cancelledStored != d.cancelled
+            if (!d.rowsTrusted) {
+                if (cancelBad) {
+                    lines += ReportLine(
+                        "✗ FR24 · $day cancelled ${d.cancelledStored ?: 0}≠${d.cancelled}",
+                        ReportLine.BAD
+                    )
+                } else {
+                    lines += ReportLine("FR24 · $day cancelled ok (rows not checked)", ReportLine.DIM)
+                }
+                continue
+            }
+            if (rowsBad) {
+                lines += ReportLine(
+                    "✗ FR24 · $day flights ${d.stored ?: 0}≠${d.total}",
+                    ReportLine.BAD
+                )
+            }
+            if (cancelBad) {
+                lines += ReportLine(
+                    "✗ FR24 · $day cancelled ${d.cancelledStored ?: 0}≠${d.cancelled}",
+                    ReportLine.BAD
+                )
+            }
+            if (!rowsBad && !cancelBad) {
+                lines += ReportLine("✓ FR24 · $day matches", ReportLine.GOOD)
+            }
         }
-        sb.append("\nOnly the last day or two can be compared: FR24's\n")
-        sb.append("schedule window no longer reaches older dates.")
-        return sb.toString().trimEnd()
-    }
-
-    private fun verdict(stored: Int?, source: Int): String = when {
-        stored == null -> "stored: none  FR24=$source"
-        stored == source -> "MATCH"
-        else -> "MISMATCH  app=$stored  FR24=$source"
+        lines += ReportLine("FR24 keeps only the last ~36h", ReportLine.DIM)
+        return lines
     }
 
     /**
@@ -347,47 +375,70 @@ class SettingsActivity : AppCompatActivity() {
     private fun runFix() {
         checkResult.text = "Fetching FR24…"
         Thread {
-            val report = try {
+            val lines = try {
                 val days = loadSource()
-                val sb = StringBuilder()
+                val out = mutableListOf<ReportLine>()
                 var fixed = 0
                 for (d in days) {
+                    val day = Clock.shortDate(d.date)
                     when {
                         d.error != null ->
-                            sb.append("  ${d.date}: skipped — FR24 unreachable\n")
+                            out += ReportLine("FR24 · $day no data (${d.error})", ReportLine.DIM)
                         !d.needsFix ->
-                            sb.append(
-                                "  ${d.date}: already correct " +
-                                    "(${d.total}, cancelled ${d.cancelled}) — untouched\n"
-                            )
+                            out += ReportLine("· $day ok (${d.cancelled} cancelled)", ReportLine.DIM)
                         else -> {
-                            val before = d.stored ?: 0
-                            store.replaceDayFlights(d.date, d.rows)
-                            store.recountDay(d.date)
+                            val rowsChanged = d.rowsTrusted && d.stored != d.rows.size
+                            if (rowsChanged) {
+                                store.replaceDayFlights(d.date, d.rows)
+                                store.recountDay(d.date)
+                            }
                             store.setCancelled(d.date, d.cancelled)
-                            val after = store.get(d.date)?.total ?: 0
+                            val parts = mutableListOf<String>()
+                            if (rowsChanged) {
+                                parts += "flights ${d.stored ?: 0}→${store.get(d.date)?.total ?: 0}"
+                            }
+                            parts += "cancelled ${d.cancelledStored ?: 0}→${d.cancelled}"
                             fixed++
-                            sb.append(
-                                "  ${d.date}: $before -> $after  " +
-                                    "FIXED (FR24=$after)  cancelled=${d.cancelled}\n"
-                            )
-                            Log.i(
-                                Fr24Api.TAG,
-                                "data fix ${d.date}: $before -> $after " +
-                                    "cancelled=${d.cancelled}"
-                            )
+                            out += ReportLine("✓ $day ${parts.joinToString(" · ")}", ReportLine.GOOD)
+                            Log.i(Fr24Api.TAG, "data fix $day ${parts.joinToString(" · ")}")
                         }
                     }
                 }
-                val head = if (fixed > 0) "FIXED $fixed day(s) from FR24\n"
-                else "NOTHING TO FIX — every day already matches FR24\n"
-                head + sb.toString().trimEnd()
+                out.add(
+                    0,
+                    ReportLine(
+                        if (fixed > 0) "FIXED $fixed day(s)" else "NOTHING TO FIX",
+                        if (fixed > 0) ReportLine.GOOD else ReportLine.DIM
+                    )
+                )
+                out
             } catch (e: Exception) {
-                "Fix failed: ${e.message}"
+                listOf(ReportLine("fix failed: ${e.message}", ReportLine.BAD))
             }
-            Log.i(Fr24Api.TAG, "data fix:\n$report")
-            runOnUiThread { checkResult.text = report }
+            Log.i(Fr24Api.TAG, "data fix:\n" + lines.joinToString("\n") { it.text })
+            runOnUiThread { checkResult.text = coloured(lines) }
         }.start()
+    }
+
+    /** The report is a stack of coloured lines: green ok, red problem, grey info. */
+    private fun coloured(lines: List<ReportLine>): CharSequence {
+        val sb = SpannableStringBuilder()
+        lines.forEachIndexed { i, line ->
+            if (i > 0) sb.append('\n')
+            val start = sb.length
+            sb.append(line.text)
+            val color = when (line.kind) {
+                ReportLine.GOOD -> 0xFF3FB950.toInt()
+                ReportLine.BAD -> 0xFFF85149.toInt()
+                ReportLine.DIM -> 0xFF8B949E.toInt()
+                else -> 0xFFC5CDD6.toInt()
+            }
+            sb.setSpan(
+                ForegroundColorSpan(color), start, sb.length,
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+        }
+        return sb
     }
 
     // -------------------------------------------------------------- backup

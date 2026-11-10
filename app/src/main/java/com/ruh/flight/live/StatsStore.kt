@@ -7,6 +7,16 @@ import android.database.sqlite.SQLiteOpenHelper
 import android.util.Log
 import org.json.JSONArray
 
+/** One line of a check report: the text plus how it should be coloured. */
+data class ReportLine(val text: String, val kind: Int = ReportLine.PLAIN) {
+    companion object {
+        const val PLAIN = 0
+        const val GOOD = 1
+        const val BAD = 2
+        const val DIM = 3
+    }
+}
+
 /** One 24h local day of ACTUAL movements (real departure + real arrival only). */
 data class DayStat(
     val date: String,      // yyyy-MM-dd, device local (Riyadh)
@@ -346,7 +356,7 @@ class StatsStore(context: Context) :
      * actual timestamp, or its status is still a planning state (SCHEDULED /
      * UNKNOWN / PREDICTED), or a day's flight count disagrees with its total.
      */
-    fun verify(): String {
+    fun verify(): List<ReportLine> {
         val flights = allFlights()
         val planning = setOf("SCHEDULED", "UNKNOWN", "PREDICTED", "CANCELED", "CANCELLED")
         val noTime = flights.filter { it.epoch <= 0L }
@@ -359,40 +369,44 @@ class StatsStore(context: Context) :
             stored != s.total
         }
 
-        val sb = StringBuilder()
-        sb.append("Scanned ${flights.size} flight(s) across ${perDate.size} day(s)\n")
-        sb.append(
-            if (noTime.isEmpty()) "PASS  no missing real time\n"
-            else "FAIL  ${noTime.size} row(s) without real time\n"
-        )
-        sb.append(
-            if (notActual.isEmpty()) "PASS  no scheduled/unknown rows\n"
-            else "FAIL  ${notActual.size} scheduled/unknown row(s)\n"
-        )
-        sb.append(
-            if (mismatch.isEmpty()) "PASS  every day's count matches its total\n"
-            else "FAIL  ${mismatch.size} day(s) mismatch: " +
-                mismatch.joinToString(", ") {
-                    "${it.date}=${perDate[it.date] ?: 0}/${it.total}"
-                } + "\n"
-        )
-        val cancelledDays = stats.filter { it.cancelled > 0 }
-        sb.append(
-            "Cancelled (no real time, schedule passed): " +
-                (if (cancelledDays.isEmpty()) "none"
-                 else cancelledDays.joinToString("  ") { "${it.date}=${it.cancelled}" }) + "\n"
-        )
-        val bad = (noTime + notActual).distinct()
-        if (bad.isNotEmpty()) {
-            sb.append("\nProblem rows:\n")
-            bad.take(20).forEach {
-                sb.append("  ${it.date} ${it.number} ${it.direction} ")
-                sb.append("epoch=${it.epoch} status=${it.status}\n")
+        val lines = mutableListOf<ReportLine>()
+        val problems = mutableListOf<String>()
+        if (noTime.isNotEmpty()) problems += "${noTime.size} rows without real time"
+        if (notActual.isNotEmpty()) problems += "${notActual.size} rows still scheduled"
+        if (mismatch.isNotEmpty()) {
+            problems += "counts " + mismatch.joinToString(", ") {
+                "${Clock.shortDate(it.date)} ${perDate[it.date] ?: 0}/${it.total}"
             }
         }
-        val ok = noTime.isEmpty() && notActual.isEmpty() && mismatch.isEmpty()
-        sb.append("\n${if (ok) "ALL CHECKS PASSED" else "CHECKS FAILED"}")
-        return sb.toString()
+
+        if (problems.isEmpty()) {
+            lines += ReportLine(
+                "✓ real time + counts · ${flights.size} flights · ${perDate.size} days",
+                ReportLine.GOOD
+            )
+        } else {
+            lines += ReportLine("✗ real time + counts FAILED", ReportLine.BAD)
+            problems.forEach { lines += ReportLine("  ✗ $it", ReportLine.BAD) }
+            (noTime + notActual).distinct().take(8).forEach {
+                lines += ReportLine(
+                    "  ${it.date} ${it.number} ${it.direction} epoch=${it.epoch}",
+                    ReportLine.DIM
+                )
+            }
+        }
+
+        val cancelledDays = stats.filter { it.cancelled > 0 }
+        if (cancelledDays.isEmpty()) {
+            lines += ReportLine("cancelled · none", ReportLine.DIM)
+        } else {
+            lines += ReportLine(
+                "cancelled · " + cancelledDays.joinToString("   ") {
+                    "${Clock.shortDate(it.date)} = ${it.cancelled}"
+                },
+                ReportLine.DIM
+            )
+        }
+        return lines
     }
 
     // ------------------------------------------------------------------- seed
@@ -485,7 +499,7 @@ class StatsStore(context: Context) :
 
     companion object {
         private const val DB_NAME = "ruh_stats.db"
-        private const val DB_VERSION = 3
+        private const val DB_VERSION = 4
         private const val TABLE = "daily_stats"
         private const val FLIGHTS = "daily_flights"
 

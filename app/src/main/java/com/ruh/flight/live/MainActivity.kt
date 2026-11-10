@@ -100,7 +100,10 @@ class MainActivity : AppCompatActivity() {
 
         // Prove the stored data is real-time only, once per launch.
         thread(name = "verify") {
-            Log.i(Fr24Api.TAG, "data check:\n" + stats.verify())
+            Log.i(
+                Fr24Api.TAG,
+                "data check:\n" + stats.verify().joinToString("\n") { it.text }
+            )
         }
     }
 
@@ -430,7 +433,7 @@ class MainActivity : AppCompatActivity() {
         }
         vb.dayBreak.text = buildString {
             append("${d.departures} departures · ${d.arrivals} arrivals")
-            if (d.cancelled > 0) append(" · ${d.cancelled} cancelled")
+            append(" · ${d.cancelled} cancelled")
         }
         vb.dayTotal.text = d.total.toString()
         vb.dayChevron.text = if (open) "▾" else "▸"

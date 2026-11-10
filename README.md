@@ -4,7 +4,7 @@ Two apps live in this repository:
 
 | folder | package | what it is |
 |---|---|---|
-| **root** | `com.ruh.flight.live` | **RUH Live Flights v2.0** — the current app: actual movements, daily statistics, history, notifications and GitHub backup. Read the section below. |
+| **root** | `com.ruh.flight.live` | **RUH Live Flights v2.1** — the current app: actual movements, daily statistics, history, notifications and GitHub backup. Read the section below. |
 | `legacy-api-app/` | `com.ruh.flight.api` | the first app (multi-source, PF-only dot rules) — kept for reference |
 
 The signed APK of the current app is in **`dist/ruh-flight-live.apk`**.
@@ -15,13 +15,13 @@ The signed APK of the current app is in **`dist/ruh-flight-live.apk`**.
 
 ---
 
-# RUH Live Flights — v2.0 (single source: Flightradar24)
+# RUH Live Flights — v2.1 (single source: Flightradar24)
 
 `com.ruh.flight.live` — RUH (Riyadh) actual movements, daily statistics, history
 and GitHub backup. Installs alongside the older `com.ruh.flight.api` app.
 
 ```
-dist/ruh-flight-live.apk     signed release (versionCode 2, versionName 2.0)
+dist/ruh-flight-live.apk     signed release (versionCode 3, versionName 2.1)
 build.sh                     build + sign + verify → dist/
 ```
 
@@ -33,7 +33,7 @@ build.sh                     build + sign + verify → dist/
 |---|---|---|
 | 1 | **TODAY** | Big total, then three squares — tappable `Departures` and `Arrivals`, plus a read-only `CANCELLED` count (see *Counting rule*). Tapping a square opens that direction's full list for today right underneath (`▸` → `▾`). |
 | 2 | **BEST DAYS** | Exactly two rows: `Today` and the single best day (`#1`), numbers only. |
-| 3 | **HISTORY** | One row per day (`date · D · A · N C · total ▸` — the cancelled count only appears when it is > 0). Tap a day → opens every flight of that day. |
+| 3 | **HISTORY** | One row per day (`date · D · A · N cancelled · total ▸`). Tap a day → opens every flight of that day. |
 
 Every opened list is **numbered** — `Flight 1 · SV1095`, `Flight 2 · …` — and
 reads the **same stored rows** the counters count, so a square showing `7` opens
@@ -90,7 +90,9 @@ day when it has **no real time** and its **scheduled time has already passed**
 on the device clock. Rows still inside their scheduled window are **not**
 counted — with no real time yet, we simply do not know what will happen. The
 count lives in `daily_stats.cancelled` (DB v4), is never stored as a flight
-row, and shows up as the `CANCELLED` square on TODAY and as `N C` in HISTORY.
+row, and shows up as the `CANCELLED` square on TODAY and as `N cancelled` in
+HISTORY. FR24 only keeps ~36 h of schedule, so the counts start with the day
+the feature shipped — older days stay at 0 for good.
 
 ---
 
@@ -181,18 +183,15 @@ never overwritten.
 
 ### Data check (Settings → Run check)
 
-Two independent checks in one report.
+Two independent checks in one report. The report is **coloured**: green = ok,
+red = problem, grey = information — and kept to a couple of lines.
 
 **1. Internal — does the database agree with itself?** Scans every stored row
 and proves the data is real-time only:
 
 ```
-Scanned 256 flight(s) across 7 day(s)
-PASS  no missing real time
-PASS  no scheduled/unknown rows
-PASS  every day's count matches its total
-Cancelled (no real time, schedule passed): 2026-11-05=2  2026-11-06=1
-ALL CHECKS PASSED
+✓ real time + counts · 740 flights · 13 days
+cancelled · 10 Nov = 67
 ```
 
 **2. Against FR24 — is the number actually right?** The internal check cannot
@@ -202,13 +201,19 @@ schedule window still covers (yesterday and today) and prints a verdict per
 day — the movement totals **and** the cancelled count:
 
 ```
-AGAINST FR24 SOURCE
-  2026-11-05: MISMATCH  app=4  FR24=76  cancelled MATCH
-  2026-11-06: MATCH  cancelled MISMATCH  app=0  FR24=1
+✓ real time + counts · 740 flights · 13 days
+cancelled · 10 Nov = 67
 
-Only the last day or two can be compared: FR24's
-schedule window no longer reaches older dates.
+✗ FR24 · 10 Nov flights 58≠51
+✗ FR24 · 10 Nov cancelled 67≠68
+FR24 · 9 Nov no data (timestamp out of range)
+FR24 keeps only the last ~36h
 ```
+
+`≠` means app ≠ FR24. When yesterday's window is out of FR24's reach, today's
+**flight totals are not compared** (the source would be missing the overnight
+movers) — only the cancelled count is, and the day is never rebuilt from an
+incomplete source.
 
 The internal part also runs automatically once per launch (visible in
 logcat); the FR24 comparison runs only when you press the button, because it
@@ -217,20 +222,20 @@ costs a handful of requests.
 ### Fix data (Settings → Fix data)
 
 The repair button for exactly the case above. It pulls yesterday and today
-again, and for **each day where the check says MISMATCH** (totals *or* the
+again, and for **each day where the check found a difference** (totals *or* the
 cancelled count) it rebuilds that day from FR24 — the day's rows are replaced
 by FR24's own rows, the total is counted back from them and the cancelled
 count is stored alongside:
 
 ```
-FIXED 1 day(s) from FR24
-  2026-11-05: already correct (75, cancelled 2) — untouched
-  2026-11-06: 8 -> 12  FIXED (FR24=12)  cancelled=1
+FIXED 1 day(s)
+✓ 10 Nov flights 58→51 · cancelled 67→68
+· 9 Nov ok (0 cancelled)
+FR24 · 9 Nov no data (timestamp out of range)
 ```
 
 Days that already match are printed as untouched — **it never overwrites good
-data**, and if everything matches it reports
-`NOTHING TO FIX — every day already matches FR24`.
+data**, and if everything matches it reports `NOTHING TO FIX`.
 
 Afterwards the screen is safe: today's refresh now **merges** its rows instead
 of replacing them, so a correct day cannot be clobbered by a later, shorter
