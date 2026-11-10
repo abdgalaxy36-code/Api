@@ -40,6 +40,16 @@
         tools:text="59 A" />
 
     <TextView
+        android:id="@+id/statCancelled"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="12dp"
+        android:textColor="#F57C00"
+        android:textSize="13sp"
+        android:visibility="gone"
+        tools:text="3 C" />
+
+    <TextView
         android:id="@+id/statTotal"
         android:layout_width="46dp"
         android:layout_height="wrap_content"

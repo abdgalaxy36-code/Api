@@ -238,10 +238,13 @@ class SettingsActivity : AppCompatActivity() {
         val date: String,
         val rows: List<LiveFlight>,
         val stored: Int?,
-        val error: String?
+        val error: String?,
+        val cancelled: Int,
+        val cancelledStored: Int?
     ) {
         val total: Int get() = rows.size
-        val needsFix: Boolean get() = error == null && stored != rows.size
+        val needsFix: Boolean get() =
+            error == null && (stored != rows.size || cancelledStored != cancelled)
     }
 
     private fun runCheck() {
@@ -288,12 +291,20 @@ class SettingsActivity : AppCompatActivity() {
 
         val yKey = y.toString()
         val tKey = t.toString()
+        val yStat = store.get(yKey)
+        val tStat = store.get(tKey)
+        // each day counts its cancelled flights from its own window: the
+        // windows overlap on today's rows, so only one may be used per day
+        val yCancelled = (yDep.cancelled[yKey] ?: 0) + (yArr.cancelled[yKey] ?: 0)
+        val tCancelled = (tDep.cancelled[tKey] ?: 0) + (tArr.cancelled[tKey] ?: 0)
         return listOf(
             SourceDay(
                 yKey,
                 yRows.filter { Clock.dayKey(it.realEpoch) == yKey },
-                store.get(yKey)?.total,
-                yErr
+                yStat?.total,
+                yErr,
+                yCancelled,
+                yStat?.cancelled
             ),
             // today also owns the flights scheduled yesterday that moved after midnight
             SourceDay(
@@ -301,8 +312,10 @@ class SettingsActivity : AppCompatActivity() {
                 (tRows.filter { Clock.dayKey(it.realEpoch) == tKey } +
                     yRows.filter { Clock.dayKey(it.realEpoch) == tKey })
                     .distinctBy { it.dedupKey() },
-                store.get(tKey)?.total,
-                tErr
+                tStat?.total,
+                tErr,
+                tCancelled,
+                tStat?.cancelled
             )
         )
     }
@@ -312,7 +325,8 @@ class SettingsActivity : AppCompatActivity() {
         for (d in loadSource()) {
             sb.append(
                 if (d.error != null) "  ${d.date}: FR24 unreachable (${d.error})\n"
-                else "  ${d.date}: ${verdict(d.stored, d.total)}\n"
+                else "  ${d.date}: ${verdict(d.stored, d.total)}" +
+                    "  cancelled ${verdict(d.cancelledStored, d.cancelled)}\n"
             )
         }
         sb.append("\nOnly the last day or two can be compared: FR24's\n")
@@ -342,15 +356,26 @@ class SettingsActivity : AppCompatActivity() {
                         d.error != null ->
                             sb.append("  ${d.date}: skipped — FR24 unreachable\n")
                         !d.needsFix ->
-                            sb.append("  ${d.date}: already correct (${d.total}) — untouched\n")
+                            sb.append(
+                                "  ${d.date}: already correct " +
+                                    "(${d.total}, cancelled ${d.cancelled}) — untouched\n"
+                            )
                         else -> {
                             val before = d.stored ?: 0
                             store.replaceDayFlights(d.date, d.rows)
                             store.recountDay(d.date)
+                            store.setCancelled(d.date, d.cancelled)
                             val after = store.get(d.date)?.total ?: 0
                             fixed++
-                            sb.append("  ${d.date}: $before -> $after  FIXED (FR24=$after)\n")
-                            Log.i(Fr24Api.TAG, "data fix ${d.date}: $before -> $after")
+                            sb.append(
+                                "  ${d.date}: $before -> $after  " +
+                                    "FIXED (FR24=$after)  cancelled=${d.cancelled}\n"
+                            )
+                            Log.i(
+                                Fr24Api.TAG,
+                                "data fix ${d.date}: $before -> $after " +
+                                    "cancelled=${d.cancelled}"
+                            )
                         }
                     }
                 }

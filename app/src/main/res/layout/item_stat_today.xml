@@ -115,5 +115,43 @@
                 android:textSize="11sp"
                 tools:text="▸" />
         </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/sqCancelledBox"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="10dp"
+            android:background="@drawable/square_bg"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:paddingVertical="12dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/cancelled"
+                android:textColor="#8B949E"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/sqCancelled"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textColor="#F57C00"
+                android:textSize="30sp"
+                android:textStyle="bold"
+                tools:text="3" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="1dp"
+                android:textColor="#6B7785"
+                android:textSize="11sp"
+                tools:text="✕" />
+        </LinearLayout>
     </LinearLayout>
 </LinearLayout>

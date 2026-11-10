@@ -13,7 +13,9 @@ data class DayStat(
     val departures: Int,
     val arrivals: Int,
     val total: Int,
-    val updatedAt: Long
+    val updatedAt: Long,
+    /** Flights with no real time whose scheduled time has passed (device clock). */
+    val cancelled: Int = 0
 )
 
 /** One stored movement, kept per day so a history day can reopen its flights. */
@@ -66,7 +68,8 @@ class StatsStore(context: Context) :
                 "departures INTEGER NOT NULL," +
                 "arrivals INTEGER NOT NULL," +
                 "total INTEGER NOT NULL," +
-                "updated_at INTEGER NOT NULL)"
+                "updated_at INTEGER NOT NULL," +
+                "cancelled INTEGER NOT NULL DEFAULT 0)"
         )
         db.execSQL(CREATE_FLIGHTS)
     }
@@ -76,6 +79,11 @@ class StatsStore(context: Context) :
         if (oldVersion < 3 && !hasColumn(db, FLIGHTS, "scheduled")) {
             db.execSQL(
                 "ALTER TABLE $FLIGHTS ADD COLUMN scheduled INTEGER NOT NULL DEFAULT 0"
+            )
+        }
+        if (oldVersion < 4 && !hasColumn(db, TABLE, "cancelled")) {
+            db.execSQL(
+                "ALTER TABLE $TABLE ADD COLUMN cancelled INTEGER NOT NULL DEFAULT 0"
             )
         }
     }
@@ -92,19 +100,36 @@ class StatsStore(context: Context) :
     // ------------------------------------------------------------- daily stats
 
     /** Live collection always wins: a fresh full-day recount replaces the row. */
-    fun record(date: String, departures: Int, arrivals: Int) {
+    fun record(date: String, departures: Int, arrivals: Int, cancelled: Int? = null) {
         if (date.isBlank()) return
+        val cancelCount = cancelled ?: (get(date)?.cancelled ?: 0)
         val cv = ContentValues().apply {
             put("date", date)
             put("departures", departures)
             put("arrivals", arrivals)
             put("total", departures + arrivals)
             put("updated_at", System.currentTimeMillis())
+            put("cancelled", cancelCount)
         }
         writableDatabase.insertWithOnConflict(
             TABLE, null, cv, SQLiteDatabase.CONFLICT_REPLACE
         )
-        Log.i(Fr24Api.TAG, "stats record $date D=$departures A=$arrivals T=${departures + arrivals}")
+        Log.i(
+            Fr24Api.TAG,
+            "stats record $date D=$departures A=$arrivals " +
+                "T=${departures + arrivals} C=$cancelCount"
+        )
+    }
+
+    /**
+     * Store the cancelled count of a day without touching its movement
+     * counts. Never invents a row for an empty day.
+     */
+    fun setCancelled(date: String, count: Int) {
+        if (date.isBlank()) return
+        val cur = get(date)
+        if (cur == null && count <= 0) return
+        record(date, cur?.departures ?: 0, cur?.arrivals ?: 0, count)
     }
 
     fun all(): List<DayStat> = queryStats("ORDER BY date DESC", null)
@@ -117,11 +142,17 @@ class StatsStore(context: Context) :
 
     private fun queryStats(where: String, args: Array<String>?): List<DayStat> =
         readableDatabase.rawQuery(
-            "SELECT date,departures,arrivals,total,updated_at FROM $TABLE $where", args
+            "SELECT date,departures,arrivals,total,updated_at,cancelled " +
+                "FROM $TABLE $where", args
         ).use { c ->
             buildList {
                 while (c.moveToNext()) {
-                    add(DayStat(c.getString(0), c.getInt(1), c.getInt(2), c.getInt(3), c.getLong(4)))
+                    add(
+                        DayStat(
+                            c.getString(0), c.getInt(1), c.getInt(2),
+                            c.getInt(3), c.getLong(4), c.getInt(5)
+                        )
+                    )
                 }
             }
         }
@@ -267,6 +298,7 @@ class StatsStore(context: Context) :
                     put("arrivals", s.arrivals)
                     put("total", s.total)
                     put("updated_at", s.updatedAt)
+                    put("cancelled", s.cancelled)
                 }
                 db.insertWithOnConflict(TABLE, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -343,6 +375,12 @@ class StatsStore(context: Context) :
                 mismatch.joinToString(", ") {
                     "${it.date}=${perDate[it.date] ?: 0}/${it.total}"
                 } + "\n"
+        )
+        val cancelledDays = stats.filter { it.cancelled > 0 }
+        sb.append(
+            "Cancelled (no real time, schedule passed): " +
+                (if (cancelledDays.isEmpty()) "none"
+                 else cancelledDays.joinToString("  ") { "${it.date}=${it.cancelled}" }) + "\n"
         )
         val bad = (noTime + notActual).distinct()
         if (bad.isNotEmpty()) {

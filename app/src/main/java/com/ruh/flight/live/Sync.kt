@@ -33,11 +33,16 @@ object Sync {
 
         stats.mergeDayFlights(todayStr, depToday + arrToday)
         stats.recountDay(todayStr)
+        stats.setCancelled(
+            todayStr,
+            (dep.cancelled[todayStr] ?: 0) + (arr.cancelled[todayStr] ?: 0)
+        )
         val day = stats.get(todayStr)
         Log.i(
             Fr24Api.TAG,
             "bg refresh D=${day?.departures ?: 0} A=${day?.arrivals ?: 0} " +
-                "T=${day?.total ?: 0} pages=${dep.pagesRead}/${arr.pagesRead}"
+                "T=${day?.total ?: 0} C=${day?.cancelled ?: 0} " +
+                "pages=${dep.pagesRead}/${arr.pagesRead}"
         )
     }
 }

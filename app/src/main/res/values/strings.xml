@@ -4,6 +4,7 @@
 
     <string name="departures">Departures</string>
     <string name="arrivals">Arrivals</string>
+    <string name="cancelled">CANCELLED</string>
 
     <string name="section_today">TODAY</string>
     <string name="section_status">STATUS</string>

@@ -38,7 +38,9 @@ data class FetchResult(
     val flights: List<LiveFlight>,
     val pagesRead: Int,
     val error: String?,
-    val via: String = ""
+    val via: String = "",
+    /** Local day -> flights with no real time whose scheduled time has passed. */
+    val cancelled: Map<String, Int> = emptyMap()
 )
 
 object Fr24Api {
@@ -85,6 +87,7 @@ object Fr24Api {
     ): FetchResult {
         val dayEnd = midnightSec + DAY_SECS
         val merged = LinkedHashMap<String, LiveFlight>()
+        val cancelledByKey = LinkedHashMap<String, String>()
         var via = ""
         var pagesRead = 0
         var err: String? = null
@@ -126,6 +129,12 @@ object Fr24Api {
             }
 
             try {
+                cancelledRows(body, mode).forEach { (k, day) -> cancelledByKey[k] = day }
+            } catch (e: Exception) {
+                android.util.Log.i(TAG, "cancelled scan $mode: ${e.message}")
+            }
+
+            try {
                 for (f in parse(body, mode)) merged[f.dedupKey()] = f
             } catch (e: Exception) {
                 if (pagesRead == 0) err = "parse ${e.message}"
@@ -149,8 +158,13 @@ object Fr24Api {
         // Zero rows is not a failure: right after midnight no flight has
         // actually departed yet, and the pages were read fine.
         if (merged.isEmpty() && err == null && pagesRead == 0) err = "fetch failed ($mode)"
-        android.util.Log.i(TAG, "$mode pages=$pagesRead rows=${merged.size} via=$via err=$err")
-        return FetchResult(merged.values.toList(), pagesRead, err, via)
+        val cancelled = cancelledByKey.values.groupingBy { it }.eachCount()
+        android.util.Log.i(
+            TAG,
+            "$mode pages=$pagesRead rows=${merged.size} " +
+                "cancelled=${cancelled.values.sum()} via=$via err=$err"
+        )
+        return FetchResult(merged.values.toList(), pagesRead, err, via, cancelled)
     }
 
     fun fetchBoth(
@@ -422,6 +436,51 @@ object Fr24Api {
         val endHtml = s.lastIndexOf("</html>")
         if (endHtml >= 0) s = s.substring(0, endHtml)
         return s.trim()
+    }
+
+    /**
+     * A flight counts as cancelled for its scheduled day when it has NO real
+     * time and its scheduled time has already passed on the device clock.
+     * Still-upcoming rows are left alone: with no real time yet we simply do
+     * not know what will happen, so they must not be called cancelled.
+     *
+     * @return "number|scheduled" -> local day of the scheduled time.
+     */
+    fun cancelledRows(body: String, mode: String): Map<String, String> {
+        val realKey = if (mode == "departures") "departure" else "arrival"
+        val now = System.currentTimeMillis() / 1000
+
+        val data = JSONObject(body).getJSONObject("result")
+            .getJSONObject("response")
+            .getJSONObject("airport")
+            .getJSONObject("pluginData")
+            .getJSONObject("schedule")
+            .getJSONObject(mode)
+            .getJSONArray("data")
+
+        val out = LinkedHashMap<String, String>()
+        for (i in 0 until data.length()) {
+            val flight = data.getJSONObject(i).getJSONObject("flight")
+            val time = flight.optJSONObject("time") ?: continue
+
+            val real = time.optJSONObject("real")
+            val realEpoch = if (real == null || real.isNull(realKey)) 0L else real.optLong(realKey)
+            if (realEpoch > 0L) continue
+
+            val scheduled = time.optJSONObject("scheduled")?.let {
+                if (it.isNull(realKey)) 0L else it.optLong(realKey)
+            } ?: 0L
+            if (scheduled <= 0L || scheduled >= now) continue
+
+            val ident = flight.optJSONObject("identification")
+            val number = ident?.optJSONObject("number")
+                ?.optString("default")?.uppercase()?.trim().orEmpty()
+            val id = ident?.optString("id")?.takeIf { it.isNotBlank() }.orEmpty()
+            val key = if (number.isNotEmpty()) number else id
+            if (key.isEmpty()) continue
+            out["$key|$scheduled"] = Clock.dayKey(scheduled)
+        }
+        return out
     }
 
     fun parse(body: String, mode: String): List<LiveFlight> {

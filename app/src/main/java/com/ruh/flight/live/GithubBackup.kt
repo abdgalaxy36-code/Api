@@ -50,6 +50,7 @@ object GithubBackup {
                     put("arrivals", d.arrivals)
                     put("total", d.total)
                     put("updated_at", d.updatedAt)
+                    put("cancelled", d.cancelled)
                 }
             )
         }
@@ -90,7 +91,12 @@ object GithubBackup {
                 if (date.isBlank()) continue
                 val dep = o.optInt("departures")
                 val arrn = o.optInt("arrivals")
-                add(DayStat(date, dep, arrn, o.optInt("total", dep + arrn), o.optLong("updated_at")))
+                add(
+                    DayStat(
+                        date, dep, arrn, o.optInt("total", dep + arrn),
+                        o.optLong("updated_at"), o.optInt("cancelled")
+                    )
+                )
             }
         }
         val flights = buildList {

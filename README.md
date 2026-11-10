@@ -31,9 +31,9 @@ build.sh                     build + sign + verify → dist/
 
 | # | Section | What it does |
 |---|---|---|
-| 1 | **TODAY** | Big total, then two tappable squares — `Departures` and `Arrivals`. Tapping a square opens that direction's full list for today right underneath (`▸` → `▾`). |
+| 1 | **TODAY** | Big total, then three squares — tappable `Departures` and `Arrivals`, plus a read-only `CANCELLED` count (see *Counting rule*). Tapping a square opens that direction's full list for today right underneath (`▸` → `▾`). |
 | 2 | **BEST DAYS** | Exactly two rows: `Today` and the single best day (`#1`), numbers only. |
-| 3 | **HISTORY** | One row per day (`date · D · A · total ▸`). Tap a day → opens every flight of that day. |
+| 3 | **HISTORY** | One row per day (`date · D · A · N C · total ▸` — the cancelled count only appears when it is > 0). Tap a day → opens every flight of that day. |
 
 Every opened list is **numbered** — `Flight 1 · SV1095`, `Flight 2 · …` — and
 reads the **same stored rows** the counters count, so a square showing `7` opens
@@ -84,6 +84,13 @@ A flight counts only if it **actually happened**: `time.real.*` is a non-zero
 epoch and the status is `departed` / `landed`. `scheduled`, `estimated`,
 `unknown`, `delayed`, `diverted` and `canceled` rows are dropped at parse time.
 Everything is in the **device timezone** (`ZoneId.systemDefault()`).
+
+**Cancelled** is counted separately: a flight is cancelled for its *scheduled*
+day when it has **no real time** and its **scheduled time has already passed**
+on the device clock. Rows still inside their scheduled window are **not**
+counted — with no real time yet, we simply do not know what will happen. The
+count lives in `daily_stats.cancelled` (DB v4), is never stored as a flight
+row, and shows up as the `CANCELLED` square on TODAY and as `N C` in HISTORY.
 
 ---
 
@@ -162,11 +169,11 @@ neither needs the phone to be awake.
 
 ## Storage
 
-SQLite `ruh_stats.db` (version 3):
+SQLite `ruh_stats.db` (version 4):
 
 | table | contents |
 |---|---|
-| `daily_stats` | `date` PK, `departures`, `arrivals`, `total`, `updated_at` |
+| `daily_stats` | `date` PK, `departures`, `arrivals`, `total`, `updated_at`, `cancelled` |
 | `daily_flights` | `date, number, direction, epoch, scheduled, origin, destination, airline, terminal, gate, aircraft, status, color` — PK `(date, number, direction, epoch)` |
 
 Seeded once from the assets (`INSERT OR IGNORE`), so app-collected rows are
@@ -184,6 +191,7 @@ Scanned 256 flight(s) across 7 day(s)
 PASS  no missing real time
 PASS  no scheduled/unknown rows
 PASS  every day's count matches its total
+Cancelled (no real time, schedule passed): 2026-11-05=2  2026-11-06=1
 ALL CHECKS PASSED
 ```
 
@@ -191,12 +199,12 @@ ALL CHECKS PASSED
 catch a day that lost its whole morning: four rows still agree with a total of
 four. So the check then asks FR24 what really happened on the days its
 schedule window still covers (yesterday and today) and prints a verdict per
-day:
+day — the movement totals **and** the cancelled count:
 
 ```
 AGAINST FR24 SOURCE
-  2026-11-05: MISMATCH  app=4  FR24=76
-  2026-11-06: MATCH
+  2026-11-05: MISMATCH  app=4  FR24=76  cancelled MATCH
+  2026-11-06: MATCH  cancelled MISMATCH  app=0  FR24=1
 
 Only the last day or two can be compared: FR24's
 schedule window no longer reaches older dates.
@@ -209,14 +217,15 @@ costs a handful of requests.
 ### Fix data (Settings → Fix data)
 
 The repair button for exactly the case above. It pulls yesterday and today
-again, and for **each day where the check says MISMATCH** it rebuilds that day
-from FR24 — the day's rows are replaced by FR24's own rows and the total is
-counted back from them:
+again, and for **each day where the check says MISMATCH** (totals *or* the
+cancelled count) it rebuilds that day from FR24 — the day's rows are replaced
+by FR24's own rows, the total is counted back from them and the cancelled
+count is stored alongside:
 
 ```
 FIXED 1 day(s) from FR24
-  2026-11-05: already correct (75) — untouched
-  2026-11-06: 8 -> 12  FIXED (FR24=12)
+  2026-11-05: already correct (75, cancelled 2) — untouched
+  2026-11-06: 8 -> 12  FIXED (FR24=12)  cancelled=1
 ```
 
 Days that already match are printed as untouched — **it never overwrites good
@@ -241,8 +250,9 @@ fetch, and both TODAY and HISTORY read their number back from the stored rows.
      recorded `total` — catches lost rows or a count without its flights.
 
   It prints a PASS/FAIL per check, lists the offending rows (first 20) and ends
-  with `ALL CHECKS PASSED` or `CHECKS FAILED`. It then compares yesterday's and
-  today's totals against FR24 itself and prints `MATCH` or
+  with `ALL CHECKS PASSED` or `CHECKS FAILED`, then prints the stored cancelled
+  counts per day. It then compares yesterday's and today's totals **and
+  cancelled counts** against FR24 itself and prints `MATCH` or
   `MISMATCH  app=…  FR24=…` per day — the only way to notice a day that lost
   data, since such a day is still internally consistent. The internal part also
   runs automatically once per launch (see logcat); the FR24 comparison runs only
@@ -344,7 +354,7 @@ Needs `JAVA_HOME` = JDK 21, `ANDROID_HOME` = `~/android-sdk`,
 
 ```
 app/src/main/java/com/ruh/flight/live/
-├── Fr24Api.kt        fetch (direct + Firecrawl), parse, real-time filter
+├── Fr24Api.kt        fetch (direct + Firecrawl), parse, real-time + cancelled scan
 ├── Clock.kt          device-time helpers (today / day key / is-today)
 ├── StatsStore.kt     SQLite daily_stats + daily_flights, seed, verify, restore
 ├── StatusColor.kt    delay → badge colour, colour → one-word meaning
@@ -356,10 +366,10 @@ app/src/main/java/com/ruh/flight/live/
 app/src/main/res/layout/
 ├── activity_main.xml      header + progress bar + page body
 ├── activity_settings.xml  settings, check, backup
-├── item_stat_today.xml    TODAY card (tappable squares)
-├── item_day.xml           history row
+├── item_stat_today.xml    TODAY card (D/A squares + CANCELLED)
+├── item_day.xml           history row (D · A · cancelled)
 ├── item_flight.xml        flight row with coloured badge
-├── item_stat.xml          best-day row
+├── item_stat.xml          best-day row (+ N C)
 └── item_label.xml         section label
 
 tools/backfill_history.py  FR24 flight-history scraper → assets

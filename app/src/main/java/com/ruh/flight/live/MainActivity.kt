@@ -169,6 +169,8 @@ class MainActivity : AppCompatActivity() {
             stats.mergeDayFlights(yStr, depY + arrY)
             stats.recountDay(yStr)
         }
+        // never got a real time but its schedule has passed -> cancelled
+        stats.setCancelled(yStr, (dep.cancelled[yStr] ?: 0) + (arr.cancelled[yStr] ?: 0))
         // scheduled yesterday, moved after midnight -> counted today
         val overnight = (dep.flights + arr.flights)
             .filter { Clock.dayKey(it.realEpoch) == todayStr }
@@ -264,6 +266,10 @@ class MainActivity : AppCompatActivity() {
                     // show two different numbers.
                     stats.mergeDayFlights(todayStr, depToday + arrToday)
                     stats.recountDay(todayStr)
+                    stats.setCancelled(
+                        todayStr,
+                        (dep.cancelled[todayStr] ?: 0) + (arr.cancelled[todayStr] ?: 0)
+                    )
                     val stored = stats.get(todayStr)
                     liveDep = stored?.departures ?: depToday.size
                     liveArr = stored?.arrivals ?: arrToday.size
@@ -330,6 +336,7 @@ class MainActivity : AppCompatActivity() {
         card.findViewById<TextView>(R.id.todayTotal).text = todayTotal.toString()
         card.findViewById<TextView>(R.id.sqDepartures).text = depShown.toString()
         card.findViewById<TextView>(R.id.sqArrivals).text = arrShown.toString()
+        card.findViewById<TextView>(R.id.sqCancelled).text = (today?.cancelled ?: 0).toString()
 
         // tapping a square opens that direction's full list for today
         card.findViewById<TextView>(R.id.sqDeparturesHint).text =
@@ -421,7 +428,10 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             d.date
         }
-        vb.dayBreak.text = "${d.departures} departures · ${d.arrivals} arrivals"
+        vb.dayBreak.text = buildString {
+            append("${d.departures} departures · ${d.arrivals} arrivals")
+            if (d.cancelled > 0) append(" · ${d.cancelled} cancelled")
+        }
         vb.dayTotal.text = d.total.toString()
         vb.dayChevron.text = if (open) "▾" else "▸"
         vb.dayRow.setOnClickListener {
@@ -474,6 +484,12 @@ class MainActivity : AppCompatActivity() {
         vb.statDate.text = if (rank == null) label else "$rank   $label"
         vb.statDep.text = "${d.departures} D"
         vb.statArr.text = "${d.arrivals} A"
+        if (d.cancelled > 0) {
+            vb.statCancelled.visibility = View.VISIBLE
+            vb.statCancelled.text = "${d.cancelled} C"
+        } else {
+            vb.statCancelled.visibility = View.GONE
+        }
         vb.statTotal.text = d.total.toString()
         return vb.root
     }
