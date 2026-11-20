@@ -97,13 +97,15 @@ object Fr24Api {
             val url = String.format(URL_TPL, AIRPORT, mode, midnightSec, page)
             val bust = url + "&cb=" + System.nanoTime()
 
-            var body = get(url, mode)
-            var source = if (body != null) "direct" else ""
+            // Jina is the primary source. Direct FR24 requests from Android's
+            // HTTP stack can stall for the full timeout on this network, which
+            // made every refresh appear disconnected even though Jina was
+            // healthy. Keep direct FR24 only as a fast fallback.
+            var body = jinaWithRetry(bust, mode)
+            var source = if (body != null) "jina" else ""
             if (body == null) {
-                // Jina is the workhorse; a DNS blip or a dropped connection
-                // should not cost us the whole refresh.
-                body = jinaWithRetry(bust, mode)
-                if (body != null) source = "jina"
+                body = get(url, mode)
+                if (body != null) source = "direct"
             }
             if (body == null) {
                 // Firecrawl's keyless tier is rate-limited, so it is a last
